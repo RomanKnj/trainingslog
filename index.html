@@ -11,7 +11,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="fonts.css">
 <link rel="stylesheet" href="hud.css">
-<link rel="stylesheet" href="training.css">
+<link rel="stylesheet" href="training.css?v=3">
 </head>
 <body>
 <div class="sweep" aria-hidden="true"></div>
@@ -92,7 +92,8 @@
   </section>
 
 </main>
-<script src="training.js"></script>
+<!-- ?v=… bei jeder Änderung an training.js/.css hochzählen: GitHub Pages lässt Browser Dateien 10 min zwischenspeichern -->
+<script src="training.js?v=3"></script>
 <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});</script>
 </body>
 </html>
