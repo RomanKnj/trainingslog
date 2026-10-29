@@ -24,6 +24,8 @@
   let calMonth = Number(sel.slice(5, 7)) - 1;
   let filter = "all";
   let search = "";
+  let hidden = new Set();   // ausgeblendete Übungen (nicht genutzte Maschinen, kein Interesse)
+  let managing = false;     // "Auswahl bearbeiten": Antippen blendet aus/ein statt aufzuklappen
   const open = new Set();   // aufgeklappte Übungen
   const drafts = new Map(); // "Datum|Übung" -> Sätze/Cardio, wie gerade in den Feldern
   const timers = new Map(); // "Datum|Übung" -> Zeitgeber fürs Speichern
@@ -73,6 +75,7 @@
     visit: (day, visit) => send("PUT", `/api/training/${day}/visit`, { visit }),
     addExercise: (name, group) => send("POST", "/api/training/exercises", { name, group }),
     removeExercise: (id) => send("DELETE", `/api/training/exercises/${id}`),
+    setHidden: (list) => send("PUT", "/api/training/hidden", { hidden: list }),
   };
 
   const localStore = (() => {
@@ -82,6 +85,7 @@
       try { d = JSON.parse(localStorage.getItem(STORE_KEY) || "null"); } catch (e) { d = null; }
       if (!d || typeof d !== "object") d = {};
       if (!Array.isArray(d.custom)) d.custom = [];
+      if (!Array.isArray(d.hidden)) d.hidden = [];
       if (!d.days || typeof d.days !== "object") d.days = {};
       return d;
     };
@@ -134,7 +138,16 @@
           catalog = await res.json();
         }
         const d = read();
-        return { groups: catalog.groups, exercises: exList(d), days: d.days };
+        const known = new Set(exList(d).map((x) => x.id));
+        return { groups: catalog.groups, exercises: exList(d), days: d.days, hidden: d.hidden.filter((id) => known.has(id)) };
+      },
+      async setHidden(list) {
+        const d = read();
+        const known = new Set(exList(d).map((x) => x.id));
+        if (!Array.isArray(list) || list.some((id) => !known.has(id))) throw new Error("Unbekannte Übung");
+        d.hidden = [...new Set(list)];
+        write(d);
+        return { hidden: d.hidden };
       },
       async entry(day, id, body) {
         checkDay(day);
@@ -174,6 +187,7 @@
         if (!d.custom.some((x) => x.id === id)) throw new Error("Nur eigene Übungen lassen sich entfernen");
         if (Object.values(d.days).some((x) => x.entries[id])) throw new Error("Die Übung hat Einträge und bleibt deshalb");
         d.custom = d.custom.filter((x) => x.id !== id);
+        d.hidden = d.hidden.filter((x) => x !== id);
         write(d);
         return { deleted: id };
       },
@@ -198,8 +212,9 @@
             custom.push({ id: x.id, name: x.name.trim(), group: x.group });
           }
         });
-        const d = { custom, days: {} };
+        const d = { custom, days: {}, hidden: [] };
         const known = new Map(exList(d).map((x) => [x.id, x]));
+        d.hidden = [...new Set((Array.isArray(file.hidden) ? file.hidden : []).filter((id) => known.has(id)))];
         let skipped = 0;
         Object.entries(file.days).forEach(([day, v]) => {
           if (!DATE_RE.test(day) || !v || typeof v !== "object") { skipped++; return; }
@@ -375,6 +390,16 @@
       });
       actions.appendChild(copy);
     }
+    const hide = make("button", "btn", hidden.has(ex.id) ? "Einblenden" : "Ausblenden");
+    hide.type = "button";
+    hide.title = "Ausgeblendete Übungen erscheinen nur noch bei der Suche und unter „Auswahl bearbeiten“";
+    hide.addEventListener("click", () => {
+      const on = !hidden.has(ex.id);
+      setHidden(ex.id, on);
+      if (on) open.delete(ex.id);
+      renderList();
+    });
+    actions.appendChild(hide);
     if (ex.custom) {
       const rm = make("button", "btn danger", "Übung entfernen");
       rm.type = "button";
@@ -420,7 +445,9 @@
     const card = cards.get(ex.id);
     if (!card) return;
     card.classList.toggle("has", Boolean(entryOf(sel, ex.id)));
+    card.classList.toggle("is-hidden", hidden.has(ex.id));
     card.querySelector(".card-head small").textContent = headText(ex);
+    card.querySelector(".card-head i").textContent = managing ? (hidden.has(ex.id) ? "ausgeblendet" : "sichtbar") : "›";
   }
 
   function buildCard(ex) {
@@ -430,6 +457,11 @@
     head.type = "button";
     head.append(make("b", null, ex.name), make("i", null, "›"), make("small"));
     head.addEventListener("click", () => {
+      if (managing) { // nur umschalten, die Liste bleibt stehen
+        setHidden(ex.id, !hidden.has(ex.id));
+        updateHead(ex);
+        return;
+      }
       if (open.has(ex.id)) open.delete(ex.id); else open.add(ex.id);
       rebuild(ex);
       if (open.has(ex.id)) card.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -443,13 +475,46 @@
   function fillCard(ex, card) {
     const old = card.querySelector(".card-body");
     if (old) old.remove();
-    card.classList.toggle("open", open.has(ex.id));
-    card.querySelector(".card-head").setAttribute("aria-expanded", String(open.has(ex.id)));
-    if (open.has(ex.id)) card.appendChild(buildBody(ex, card));
+    const isOpen = open.has(ex.id) && !managing;
+    card.classList.toggle("open", isOpen);
+    const head = card.querySelector(".card-head");
+    if (managing) {
+      head.removeAttribute("aria-expanded");
+      head.setAttribute("aria-pressed", String(!hidden.has(ex.id)));
+    } else {
+      head.removeAttribute("aria-pressed");
+      head.setAttribute("aria-expanded", String(isOpen));
+    }
+    if (isOpen) card.appendChild(buildBody(ex, card));
     updateHead(ex);
   }
 
   const rebuild = (ex) => fillCard(ex, cards.get(ex.id));
+
+  // ---------- Übungen ausblenden ----------
+  // Gespeichert wird jedes Mal die ganze Liste. Die Aufrufe laufen nacheinander, so gewinnt bei schnellem
+  // Antippen immer der letzte Stand.
+  let hiddenQueue = Promise.resolve();
+
+  function setHidden(id, on) {
+    if (on) hidden.add(id); else hidden.delete(id);
+    const list = [...hidden];
+    hiddenQueue = hiddenQueue
+      .then(() => store.setHidden(list))
+      .catch((err) => banner("Ausblenden nicht gespeichert: " + errText(err), "alarm"));
+    renderHideBar();
+  }
+
+  function renderHideBar() {
+    const n = exercises.filter((x) => hidden.has(x.id)).length;
+    $("#hide-text").textContent = managing
+      ? "Übung antippen blendet sie aus oder wieder ein."
+      : n ? `${n} ${n === 1 ? "Übung" : "Übungen"} ausgeblendet` : "Nicht genutzte Übungen lassen sich ausblenden.";
+    const btn = $("#hide-manage");
+    btn.textContent = managing ? "Fertig" : "Auswahl bearbeiten";
+    btn.classList.toggle("play", managing);
+    $("#ex-list").classList.toggle("managing", managing);
+  }
 
   async function removeExercise(ex, card) {
     if (!confirm(`„${ex.name}“ entfernen?`)) return;
@@ -498,7 +563,10 @@
 
   function renderList() {
     const q = search.toLowerCase();
-    const shown = exercises.filter((x) => (q ? x.name.toLowerCase().includes(q) : filter === "all" || x.group === filter));
+    const inFilter = exercises.filter((x) => (q ? x.name.toLowerCase().includes(q) : filter === "all" || x.group === filter));
+    // Ausgeblendete zeigen: beim Bearbeiten der Auswahl, bei der Suche (zum Wiederfinden) und wenn am Tag etwas eingetragen ist
+    const shown = inFilter.filter((x) => managing || q || !hidden.has(x.id) || entryOf(sel, x.id));
+    renderHideBar();
     const box = $("#ex-list");
     box.replaceChildren();
     cards.clear();
@@ -510,7 +578,11 @@
       box.appendChild(h);
       list.forEach((ex) => box.appendChild(buildCard(ex)));
     });
-    if (!shown.length) box.appendChild(make("p", "empty", "Keine Übung gefunden. Unten lässt sich eine eigene anlegen."));
+    if (!shown.length) {
+      box.appendChild(make("p", "empty", inFilter.length
+        ? "Alle Übungen hier sind ausgeblendet. Über „Auswahl bearbeiten“ holst du sie zurück."
+        : "Keine Übung gefunden. Unten lässt sich eine eigene anlegen."));
+    }
   }
 
   function renderDay() {
@@ -548,6 +620,7 @@
         search = "";
         $("#search").value = "";
         filter = ex.group;
+        managing = false;
         open.add(ex.id);
         renderChips();
         renderList();
@@ -628,6 +701,7 @@
       version: 1,
       exported: new Date().toISOString(),
       custom: exercises.filter((x) => x.custom).map(({ id, name, group }) => ({ id, name, group })),
+      hidden: [...hidden],
       days,
     };
     const blob = new Blob([JSON.stringify(file, null, 1)], { type: "application/json" });
@@ -726,6 +800,11 @@
   $("#cal-prev").addEventListener("click", () => shiftCal(-1));
   $("#cal-next").addEventListener("click", () => shiftCal(1));
   $("#search").addEventListener("input", () => { search = $("#search").value.trim(); renderList(); });
+  $("#hide-manage").addEventListener("click", () => {
+    managing = !managing;
+    renderList();
+    if (!managing) $("#hide-manage").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
 
   let addGroup = "oberkoerper";
   function renderAddGroups() {
@@ -766,6 +845,7 @@
       groupById = Object.fromEntries(groups.map((g) => [g.id, g]));
       exercises = res.exercises;
       days = res.days;
+      hidden = new Set(res.hidden || []);
       if (filter !== "all" && !groupById[filter]) filter = "all";
       loaded = true;
       renderAddGroups();

@@ -152,6 +152,14 @@ ul { list-style: none; margin: 0; padding: 0; }
 .card.open .card-head i { transform: rotate(90deg); }
 .card-body { padding: 0 12px 12px; }
 
+/* Ausblenden: Leiste unter der Suche, abgedunkelte Karten, im Bearbeiten-Modus "sichtbar"/"ausgeblendet" statt › */
+.hide-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: -2px 0 8px; font-size: 0.85rem; color: var(--dim); }
+.card.is-hidden { opacity: 0.45; }
+.card.is-hidden.has { opacity: 0.7; }
+.managing .card-head i { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--g); transform: none !important; }
+.managing .card.is-hidden .card-head i { color: var(--dim); }
+.managing .card { cursor: pointer; }
+
 /* Satz-Tabelle */
 .sets { width: 100%; border-collapse: collapse; }
 .sets th { padding: 2px 4px 6px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; text-align: left; color: var(--dim); }
