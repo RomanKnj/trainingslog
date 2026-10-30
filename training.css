@@ -14,9 +14,10 @@
   grid-template-areas:
     "bar bar"
     "day ex"
+    "rank ex"
     "hist ex"
     "data ex";
-  grid-template-rows: auto auto auto 1fr;
+  grid-template-rows: auto auto auto auto 1fr;
   align-content: start;
 }
 .tr .bar { grid-area: bar; }
@@ -24,6 +25,34 @@
 .tr .ex { grid-area: ex; }
 .tr .hist { grid-area: hist; align-self: start; }
 .tr .data { grid-area: data; align-self: start; }
+.tr .rank { grid-area: rank; align-self: start; }
+
+/* Rangliste */
+.rk-me { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.rk-me b { font-size: 1.5rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
+.rk-me span { font-family: var(--zahl); font-size: 1.1rem; color: var(--kern); }
+.rk-bar { height: 8px; margin-top: 4px; background: rgba(95, 217, 255, 0.1); }
+.rk-bar i { display: block; height: 100%; }
+.rank .note { margin: 6px 0 0; }
+.rk-input { width: 100%; margin-bottom: 8px; padding: 9px 11px; font: inherit; font-size: 1.05rem; color: var(--kern); background: rgba(4, 11, 20, 0.7); border: 1px solid var(--linie); }
+.rk-input::placeholder { color: rgba(111, 164, 184, 0.6); }
+#rk-form { margin-top: 10px; }
+#rk-form .btn { display: block; width: 100%; margin-bottom: 12px; }
+#rk-code { font-family: var(--zahl); text-transform: uppercase; }
+#rk-code::placeholder { font-family: var(--kopf); text-transform: none; }
+#rk-board { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(95, 217, 255, 0.12); }
+#rk-join[hidden], #rk-board[hidden] { display: none; }
+.rk-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.rk-head b { min-width: 0; overflow-wrap: anywhere; font-size: 1.1rem; color: var(--kern); }
+.rk-head .btn { font-family: var(--zahl); letter-spacing: 0.04em; text-transform: none; }
+.rk-list li { display: grid; grid-template-columns: 1.8rem minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 4px; border-bottom: 1px solid rgba(95, 217, 255, 0.1); }
+.rk-list li.me { background: rgba(95, 217, 255, 0.1); }
+.rk-list .pos { font-family: var(--zahl); color: var(--hologramm); text-align: center; }
+.rk-list .who { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.rk-list small { display: block; font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; }
+.rk-list b { font-family: var(--zahl); font-weight: 400; color: var(--kern); white-space: nowrap; }
+.rk-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+.rk-foot .note { margin: 0; }
 
 /* Daten sichern; "due": seit über einer Woche nicht gesichert (nur bei Speicherung im Browser) */
 .data-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }

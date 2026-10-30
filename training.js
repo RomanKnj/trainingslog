@@ -26,6 +26,7 @@
   let search = "";
   let hidden = new Set();   // ausgeblendete Übungen (nicht genutzte Maschinen, kein Interesse)
   let managing = false;     // "Auswahl bearbeiten": Antippen blendet aus/ein statt aufzuklappen
+  let group = null;         // Ranglisten-Gruppe: code, member_id, secret, name, group_name
   const open = new Set();   // aufgeklappte Übungen
   const drafts = new Map(); // "Datum|Übung" -> Sätze/Cardio, wie gerade in den Feldern
   const timers = new Map(); // "Datum|Übung" -> Zeitgeber fürs Speichern
@@ -76,6 +77,7 @@
     addExercise: (name, group) => send("POST", "/api/training/exercises", { name, group }),
     removeExercise: (id) => send("DELETE", `/api/training/exercises/${id}`),
     setHidden: (list) => send("PUT", "/api/training/hidden", { hidden: list }),
+    setGroup: (g) => send("PUT", "/api/training/group", { group: g }),
   };
 
   const localStore = (() => {
@@ -139,7 +141,12 @@
         }
         const d = read();
         const known = new Set(exList(d).map((x) => x.id));
-        return { groups: catalog.groups, exercises: exList(d), days: d.days, hidden: d.hidden.filter((id) => known.has(id)) };
+        return { groups: catalog.groups, exercises: exList(d), days: d.days, hidden: d.hidden.filter((id) => known.has(id)), group: d.group || null };
+      },
+      async setGroup(g) {
+        const d = read();
+        d.group = g;
+        persist(d); // zählt nicht als neuer Eintrag für die Sicherungs-Erinnerung
       },
       async setHidden(list) {
         const d = read();
@@ -228,6 +235,9 @@
           });
           if (Object.keys(entries).length || v.visit) d.days[day] = { visit: Boolean(v.visit) || Object.keys(entries).length > 0, entries };
         });
+        const g = file.group;
+        const validGroup = g && ["code", "member_id", "secret", "name", "group_name"].every((k) => typeof g[k] === "string");
+        d.group = validGroup ? g : read().group || null; // Sicherung ohne Gruppe: aktuelle Gruppe behalten
         return { data: d, skipped };
       },
       replace(d) {
@@ -295,6 +305,7 @@
         if (res.day) days[day] = res.day; else delete days[day];
         if (day === sel) { updateHead(ex); setState(card, "Gespeichert ✓", "ok"); }
         renderSide();
+        schedulePush();
       } catch (err) {
         setState(card, "Nicht gespeichert: " + errText(err), "err");
       }
@@ -585,6 +596,22 @@
     }
   }
 
+  /** Besuche: diese Woche, dieser Monat, Wochen am Stück (die laufende Woche zählt mit, sobald sie einen Besuch hat). */
+  function visitStats() {
+    const today = todayIso();
+    const visits = Object.keys(days).filter(visited);
+    const monday = mondayOf(today);
+    const weeks = new Set(visits.map(mondayOf));
+    let w = weeks.has(monday) ? monday : monday - 7;
+    let streak = 0;
+    while (weeks.has(w)) { streak++; w -= 7; }
+    return {
+      monday, streak,
+      week: visits.filter((v) => dayNum(v) >= monday && v <= today).length,
+      month: visits.filter((v) => v.slice(0, 7) === today.slice(0, 7)).length,
+    };
+  }
+
   function renderDay() {
     const today = todayIso();
     const label = sel === today ? "Heute" : sel === fromDayNum(dayNum(today) - 1) ? "Gestern" : weekday(sel);
@@ -599,16 +626,10 @@
     $("#visit-title").textContent = sel === today ? (on ? "Heute im Gym ✓" : "Heute im Gym") : (on ? `Im Gym am ${short(sel)} ✓` : `Im Gym am ${short(sel)}?`);
     $("#visit-sub").textContent = n ? `${n} ${n === 1 ? "Übung" : "Übungen"} eingetragen` : on ? "Gespeichert. Nochmal antippen nimmt es zurück." : "Antippen, wenn du da bist";
 
-    // Besuche: diese Woche, dieser Monat, Wochen am Stück (die laufende Woche zählt mit, sobald sie einen Besuch hat)
-    const visits = Object.keys(days).filter(visited);
-    const monday = mondayOf(today);
-    $("#s-week").textContent = visits.filter((v) => dayNum(v) >= monday && v <= today).length;
-    $("#s-month").textContent = visits.filter((v) => v.slice(0, 7) === today.slice(0, 7)).length;
-    const weeks = new Set(visits.map(mondayOf));
-    let w = weeks.has(monday) ? monday : monday - 7;
-    let streak = 0;
-    while (weeks.has(w)) { streak++; w -= 7; }
-    $("#s-streak").textContent = streak;
+    const stats = visitStats();
+    $("#s-week").textContent = stats.week;
+    $("#s-month").textContent = stats.month;
+    $("#s-streak").textContent = stats.streak;
 
     const ul = $("#done-list");
     const done = exercises.filter((x) => d.entries[x.id]);
@@ -702,6 +723,7 @@
       exported: new Date().toISOString(),
       custom: exercises.filter((x) => x.custom).map(({ id, name, group }) => ({ id, name, group })),
       hidden: [...hidden],
+      group,
       days,
     };
     const blob = new Blob([JSON.stringify(file, null, 1)], { type: "application/json" });
@@ -743,6 +765,168 @@
     }
   }
 
+  // ---------- Rangliste ----------
+  // Punkte und Besuchszahlen rechnet jedes Gerät selbst aus seinen Einträgen; zu Supabase gehen nur diese Zahlen und
+  // der Name, nie Übungen oder Gewichte (supabase.sql). Der Publishable Key ist öffentlich, die Datenbank lässt damit
+  // nur die Funktionen rl_* zu. Der Gruppen-Code zeigt die Rangliste, ändern kann man nur die eigene Zeile.
+  const SUPA_URL = "https://wluqvllrnrcuiykquevi.supabase.co";
+  const SUPA_KEY = "sb_publishable_V-r7ggXqjjDBbTXpgzAIeg_qL6IyAue";
+  const POINTS = { visit: 10, set: 1, setsPerDay: 30, cardio: 5, record: 5 };
+  const RANKS = [["Bronze", 0, "#cd7f32"], ["Silber", 200, "#c8d2dc"], ["Gold", 600, "#ffd84a"], ["Platin", 1500, "#7fe5d8"], ["Diamant", 3000, "#9ec9ff"]];
+  const SORTS = [["points", "Punkte"], ["week", "Woche"], ["month", "Monat"], ["streak", "Serie"]];
+  let board = null;
+  let boardError = "";
+  let sortBy = "points";
+  let lastPush = "";
+  let pushTimer = null;
+
+  async function rpc(fn, args) {
+    let res;
+    try {
+      res = await fetch(`${SUPA_URL}/rest/v1/rpc/${fn}`, {
+        method: "POST", headers: { apikey: SUPA_KEY, "Content-Type": "application/json" }, body: JSON.stringify(args),
+      });
+    } catch (err) {
+      throw new Error("Rangliste gerade nicht erreichbar");
+    }
+    const body = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(res.status < 500 && body && body.message ? body.message : "Rangliste gerade nicht erreichbar");
+    return body;
+  }
+
+  /** Alle Punkte aus den Einträgen. Bestwert = mehr kg, bei gleichem Gewicht mehr Wiederholungen; der erste Eintrag zählt nicht. */
+  function computePoints() {
+    const best = {};
+    let points = 0;
+    Object.keys(days).sort().forEach((date) => {
+      if (visited(date)) points += POINTS.visit;
+      let sets = 0;
+      Object.entries(days[date].entries).forEach(([id, e]) => {
+        if (e.cardio) { points += POINTS.cardio; return; }
+        const done = e.sets.filter((s) => s.reps > 0);
+        sets += done.length;
+        if (!done.length) return;
+        const better = (a, b) => a.kg > b.kg || (a.kg === b.kg && a.reps > b.reps);
+        const top = done.reduce((a, s) => (better(s, a) ? s : a));
+        if (best[id] && better(top, best[id])) points += POINTS.record;
+        if (!best[id] || better(top, best[id])) best[id] = top;
+      });
+      points += Math.min(sets, POINTS.setsPerDay) * POINTS.set;
+    });
+    return points;
+  }
+
+  const rankOf = (points) => [...RANKS].reverse().find((r) => points >= r[1]);
+
+  function schedulePush() {
+    if (!group) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(pushStats, 2500);
+  }
+
+  async function pushStats() {
+    if (!group) return;
+    const s = visitStats();
+    const args = {
+      p_member_id: group.member_id, p_secret: group.secret, p_points: computePoints(), p_visits_week: Math.min(s.week, 7),
+      p_visits_month: Math.min(s.month, 31), p_streak_weeks: s.streak, p_week_start: fromDayNum(s.monday), p_month_key: todayIso().slice(0, 7),
+    };
+    const sig = JSON.stringify(args);
+    try {
+      if (sig !== lastPush) { await rpc("rl_push", args); lastPush = sig; }
+      await loadBoard();
+    } catch (err) {
+      boardError = err.message;
+      renderRank();
+    }
+  }
+
+  async function loadBoard() {
+    if (!group) return;
+    try {
+      board = await rpc("rl_board", { p_code: group.code });
+      boardError = board ? "" : "Diese Gruppe gibt es nicht mehr";
+    } catch (err) {
+      boardError = err.message;
+    }
+    renderRank();
+  }
+
+  function boardValue(m, by) {
+    const s = visitStats();
+    if (by === "week") return m.week_start === fromDayNum(s.monday) ? m.visits_week : 0; // alte Woche zählt nicht mehr
+    if (by === "month") return m.month_key === todayIso().slice(0, 7) ? m.visits_month : 0;
+    return by === "streak" ? m.streak_weeks : m.points;
+  }
+
+  function renderRank() {
+    const points = computePoints();
+    const rank = rankOf(points);
+    const next = RANKS[RANKS.indexOf(rank) + 1];
+    const name = $("#rk-name");
+    name.textContent = rank[0];
+    name.style.color = rank[2];
+    $("#rk-points").textContent = `${points} Punkte`;
+    const fill = $("#rk-fill");
+    fill.style.background = rank[2];
+    fill.style.width = next ? `${Math.round(((points - rank[1]) / (next[1] - rank[1])) * 100)}%` : "100%";
+    $("#rk-next").textContent = next ? `Noch ${next[1] - points} Punkte bis ${next[0]}` : "Höchster Rang erreicht";
+
+    $("#rk-join").hidden = Boolean(group);
+    $("#rk-board").hidden = !group;
+    if (!group) return;
+    $("#rk-gname").textContent = group.group_name;
+    $("#rk-copy").textContent = `Code ${group.code}`;
+    $("#rk-state").textContent = boardError;
+    $("#rk-sort").replaceChildren(...SORTS.map(([id, label]) => {
+      const b = make("button", "chip all", label);
+      b.type = "button";
+      b.setAttribute("aria-selected", String(sortBy === id));
+      b.addEventListener("click", () => { sortBy = id; renderRank(); });
+      return b;
+    }));
+    const members = board ? [...board.members] : [];
+    members.sort((a, b) => boardValue(b, sortBy) - boardValue(a, sortBy) || b.points - a.points);
+    const unit = { points: "P", week: "×", month: "×", streak: "Wo." }[sortBy];
+    $("#rk-list").replaceChildren(...members.map((m, i) => {
+      const li = make("li", m.id === group.member_id ? "me" : "");
+      const r = rankOf(m.points);
+      li.append(make("span", "pos", String(i + 1)));
+      const who = make("span", "who", m.name);
+      const badge = make("small", null, r[0]);
+      badge.style.color = r[2];
+      who.appendChild(badge);
+      li.append(who, make("b", null, `${boardValue(m, sortBy)} ${unit}`));
+      return li;
+    }));
+  }
+
+  async function saveGroup(g) {
+    await store.setGroup(g);
+    group = g;
+    board = null;
+    boardError = "";
+    lastPush = "";
+    renderRank();
+    if (g) await pushStats();
+  }
+
+  async function joinOrCreate(create) {
+    const note = $("#rk-note");
+    const member = $("#rk-member").value.trim();
+    const value = (create ? $("#rk-group") : $("#rk-code")).value.trim();
+    if (!member || !value) { note.textContent = create ? "Dein Name und ein Gruppenname fehlen." : "Dein Name und der Gruppen-Code fehlen."; return; }
+    note.textContent = "Moment …";
+    try {
+      const res = create ? await rpc("rl_create_group", { p_group_name: value, p_member_name: member })
+        : await rpc("rl_join_group", { p_code: value, p_member_name: member });
+      await saveGroup({ code: res.code, member_id: res.member_id, secret: res.secret, name: res.name, group_name: res.group_name });
+      note.textContent = "";
+    } catch (err) {
+      note.textContent = err.message;
+    }
+  }
+
   function renderBanner() {
     if (!loaded) return;
     $("#banner").style.cursor = backupDue() ? "pointer" : "";
@@ -760,6 +944,7 @@
     renderChips();
     renderCalendar();
     renderData();
+    renderRank();
     renderBanner();
   }
 
@@ -786,6 +971,7 @@
       const res = await store.visit(sel, !d.visit);
       if (res.day) days[sel] = res.day; else delete days[sel];
       renderSide();
+      schedulePush();
     } catch (err) {
       banner(errText(err), "alarm");
     } finally {
@@ -846,14 +1032,32 @@
       exercises = res.exercises;
       days = res.days;
       hidden = new Set(res.hidden || []);
+      group = res.group || null;
       if (filter !== "all" && !groupById[filter]) filter = "all";
       loaded = true;
       renderAddGroups();
       renderAll();
+      pushStats();
     } catch (err) {
       banner(LOCAL ? errText(err) : "Pi nicht erreichbar", "alarm");
     }
   }
+
+  $("#rk-join-btn").addEventListener("click", () => joinOrCreate(false));
+  $("#rk-create-btn").addEventListener("click", () => joinOrCreate(true));
+  $("#rk-form").addEventListener("submit", (e) => { e.preventDefault(); joinOrCreate(!$("#rk-code").value.trim()); });
+  $("#rk-copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(group.code); $("#rk-state").textContent = "Code kopiert"; } catch (err) { $("#rk-state").textContent = `Code: ${group.code}`; }
+  });
+  $("#rk-leave").addEventListener("click", async () => {
+    if (!confirm(`„${group.group_name}“ verlassen? Du verschwindest aus der Rangliste, deine Trainingsdaten bleiben.`)) return;
+    try {
+      await rpc("rl_leave", { p_member_id: group.member_id, p_secret: group.secret });
+      await saveGroup(null);
+    } catch (err) {
+      $("#rk-state").textContent = err.message;
+    }
+  });
 
   $("#export").addEventListener("click", exportFile);
   // Am Handy steht "Daten sichern" ganz unten: die Erinnerung oben führt per Tippen dorthin

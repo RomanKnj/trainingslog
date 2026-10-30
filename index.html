@@ -11,7 +11,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="fonts.css">
 <link rel="stylesheet" href="hud.css">
-<link rel="stylesheet" href="training.css?v=3">
+<link rel="stylesheet" href="training.css?v=4">
 </head>
 <body>
 <div class="sweep" aria-hidden="true"></div>
@@ -53,7 +53,32 @@
     <p class="empty" id="done-empty">Noch nichts eingetragen. Unten eine Übung antippen, Wiederholungen und kg eintragen, das speichert sich von selbst.</p>
   </section>
 
-  <section class="panel ex" style="--n:2">
+  <section class="panel rank" style="--n:2">
+    <h2>Rangliste</h2>
+    <div class="rk-me"><b id="rk-name">–</b><span id="rk-points"></span></div>
+    <div class="rk-bar"><i id="rk-fill"></i></div>
+    <p class="note" id="rk-next"></p>
+    <details class="add-ex" id="rk-join">
+      <summary>Mit Freunden vergleichen</summary>
+      <form id="rk-form" autocomplete="off">
+        <input class="rk-input" id="rk-member" maxlength="24" placeholder="Dein Name in der Rangliste" aria-label="Dein Name">
+        <input class="rk-input" id="rk-code" maxlength="8" placeholder="Gruppen-Code von deinen Freunden" aria-label="Gruppen-Code">
+        <button class="btn play" type="button" id="rk-join-btn">Beitreten</button>
+        <input class="rk-input" id="rk-group" maxlength="24" placeholder="Oder Name einer neuen Gruppe" aria-label="Name der neuen Gruppe">
+        <button class="btn" type="button" id="rk-create-btn">Gruppe anlegen</button>
+        <p class="note" id="rk-note"></p>
+        <p class="empty">Geteilt werden nur dein Name, Punkte, Besuche und Wochen-Serie, nie Übungen oder Gewichte.</p>
+      </form>
+    </details>
+    <div id="rk-board" hidden>
+      <div class="rk-head"><b id="rk-gname"></b><button class="btn" type="button" id="rk-copy" title="Code kopieren und an Freunde schicken"></button></div>
+      <div class="chips" id="rk-sort"></div>
+      <ol class="rk-list" id="rk-list"></ol>
+      <div class="rk-foot"><span class="note" id="rk-state"></span><button class="btn danger" type="button" id="rk-leave">Verlassen</button></div>
+    </div>
+  </section>
+
+  <section class="panel ex" style="--n:3">
     <h2>Übungen</h2>
     <div class="chips" id="chips" role="tablist" aria-label="Bereich"></div>
     <input class="search" id="search" type="search" placeholder="Übung suchen" autocomplete="off" aria-label="Übung suchen">
@@ -69,7 +94,7 @@
     </details>
   </section>
 
-  <section class="panel hist" style="--n:3">
+  <section class="panel hist" style="--n:4">
     <h2>Verlauf</h2>
     <div class="cal-nav">
       <b id="cal-name">–</b>
@@ -80,7 +105,7 @@
     <p class="legend" id="legend"></p>
   </section>
 
-  <section class="panel data" style="--n:4">
+  <section class="panel data" style="--n:5">
     <h2>Daten sichern</h2>
     <p class="empty" id="data-info"></p>
     <div class="data-row">
@@ -93,7 +118,7 @@
 
 </main>
 <!-- ?v=… bei jeder Änderung an training.js/.css hochzählen: GitHub Pages lässt Browser Dateien 10 min zwischenspeichern -->
-<script src="training.js?v=3"></script>
+<script src="training.js?v=4"></script>
 <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});</script>
 </body>
 </html>
